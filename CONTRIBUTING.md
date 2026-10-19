@@ -26,7 +26,7 @@ A `perf:` change that users should know about belongs in a `feat:` commit.
     go test -race -count=1 ./...
     golangci-lint run ./...                # .golangci.yml, `default: all`
 
-CI runs the same checks on Go 1.24 through the latest release, on Linux and macOS,
+CI runs the same checks on the stable and oldstable Go releases, on Linux (amd64) and macOS (arm64),
 plus `govulncheck` and a coverage gate.
 
 ## Changes on a hot path
