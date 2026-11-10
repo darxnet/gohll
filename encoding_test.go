@@ -5,6 +5,7 @@ import (
 	"encoding"
 	"encoding/binary"
 	"errors"
+	"math"
 	"testing"
 
 	"github.com/darxnet/gohll"
@@ -136,6 +137,7 @@ func TestSketch_UnmarshalBinaryErrors(t *testing.T) {
 		},
 		{name: "trailing", data: append(append([]byte{}, good...), 0), want: gohll.ErrEncoding},
 		{name: "truncated", data: good[:len(good)-1], want: gohll.ErrEncoding},
+		{name: "rank", data: axiomhqDense(append(make([]byte, 1<<14-1), 52)), want: gohll.ErrEncoding},
 	}
 
 	for _, tt := range tests {
@@ -149,4 +151,85 @@ func TestSketch_UnmarshalBinaryErrors(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestSketch_CountSaturates(t *testing.T) {
+	t.Parallel()
+
+	// every register at the highest rank Add can write: the estimate is past
+	// the uint64 range and must not depend on how the platform converts it
+	regs := bytes.Repeat([]byte{51}, 1<<14)
+
+	var s gohll.Sketch
+
+	if err := s.UnmarshalBinary(axiomhqDense(regs)); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := s.Count(); got != math.MaxUint64 {
+		t.Fatalf("Count() = %d, want MaxUint64", got)
+	}
+}
+
+// FuzzUnmarshalBinary feeds UnmarshalBinary corrupted and truncated input: it
+// must never panic, a rejected input must leave the sketch untouched, and an
+// accepted one must encode back to the same bytes.
+func FuzzUnmarshalBinary(f *testing.F) {
+	var seed gohll.Sketch
+
+	for i := range 1000 {
+		seed.Add(uint64(i) * 0x9E3779B97F4A7C15)
+	}
+
+	valid, err := seed.MarshalBinary()
+	if err != nil {
+		f.Fatal(err)
+	}
+
+	f.Add(valid)
+	f.Add(valid[:len(valid)-1])
+	f.Add(valid[:8])
+	f.Add(valid[:3])
+	f.Add([]byte{})
+	f.Add(append([]byte{2, 14, 0, 1}, valid[4:]...))
+	f.Add(axiomhqDense(bytes.Repeat([]byte{0xFF}, 1<<14)))
+
+	f.Fuzz(func(t *testing.T, data []byte) {
+		var s gohll.Sketch
+
+		s.Add(1 << 63) // a known state to compare against on error
+
+		before, err := s.MarshalBinary()
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if err = s.UnmarshalBinary(data); err != nil {
+			if !errors.Is(err, gohll.ErrEncoding) && !errors.Is(err, gohll.ErrSparseEncoding) {
+				t.Fatalf("UnmarshalBinary error %v wraps neither ErrEncoding nor ErrSparseEncoding", err)
+			}
+
+			after, mErr := s.MarshalBinary()
+			if mErr != nil {
+				t.Fatal(mErr)
+			}
+
+			if !bytes.Equal(after, before) {
+				t.Fatal("a rejected input must leave the sketch unchanged")
+			}
+
+			return
+		}
+
+		again, err := s.MarshalBinary()
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if !bytes.Equal(again, data) {
+			t.Fatal("an accepted input must encode back to the same bytes")
+		}
+
+		_ = s.Count()
+	})
 }

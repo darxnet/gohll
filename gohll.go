@@ -32,6 +32,10 @@ const (
 	words            = registers / registersPerWord
 	registerMask     = 0xFF
 
+	// maxRank is the largest register value Add can write: the leading zeros
+	// of the 64-precision bits below the index, plus one.
+	maxRank = 64 - precision + 1
+
 	// alpha is the bias correction of the raw estimate for m >= 128.
 	alpha = 0.7213 / (1 + 1.079/registers)
 )
@@ -47,7 +51,7 @@ func (s *Sketch) Add(hash uint64) {
 	i := hash >> (64 - precision)
 	// the rank: leading zeros of the remaining 50 bits, plus one; the top 14
 	// bits are forced to one so that they do not count
-	rank := uint64(bits.LeadingZeros64(hash<<precision|(1<<precision-1))) + 1 //nolint:gosec // G115 at most 51
+	rank := uint64(bits.LeadingZeros64(hash<<precision|(1<<precision-1))) + 1 //nolint:gosec // G115 at most maxRank
 
 	w := &s.words[i/registersPerWord]
 	shift := (i % registersPerWord) * 8
@@ -93,6 +97,12 @@ func (s *Sketch) Count() uint64 {
 	// polynomial in the number of empty ones standing in for both the
 	// small-range (linear counting) and the mid-range bias corrections.
 	estimate := alpha * registers * (registers - empty) / (sum + beta(empty))
+
+	// registers near maxRank (only reachable through UnmarshalBinary) give an
+	// estimate past the uint64 range, whose conversion is platform-dependent
+	if estimate >= math.MaxUint64 {
+		return math.MaxUint64
+	}
 
 	return uint64(estimate + 0.5)
 }
