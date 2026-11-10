@@ -91,6 +91,14 @@ func (s *Sketch) UnmarshalBinary(data []byte) error {
 
 	regs := data[headerLen:]
 
+	// validate everything before the first store, so that a rejected input
+	// leaves the sketch as it was
+	for i, r := range regs {
+		if r > maxRank {
+			return fmt.Errorf("%w: register %d is %d, max %d", ErrEncoding, i, r, maxRank)
+		}
+	}
+
 	for i := range s.words {
 		var cur uint64
 
