@@ -11,7 +11,7 @@ import (
 //
 //	byte 0    version (2)
 //	byte 1    precision (14)
-//	byte 2    0 (reserved)
+//	byte 2    0 (axiomhq's version 1 register bias; version 2 requires 0)
 //	byte 3    representation: 0 dense, 1 sparse
 //	byte 4-7  number of registers, big-endian uint32 (16384)
 //	byte 8-   one byte per register
@@ -71,6 +71,10 @@ func (s *Sketch) UnmarshalBinary(data []byte) error {
 
 	if data[1] != precision {
 		return fmt.Errorf("%w: precision %d, want %d", ErrEncoding, data[1], precision)
+	}
+
+	if data[2] != 0 {
+		return fmt.Errorf("%w: header byte 2 is %d, want 0", ErrEncoding, data[2])
 	}
 
 	switch data[3] {

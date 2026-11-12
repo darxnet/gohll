@@ -129,23 +129,52 @@ func TestSizes(t *testing.T) {
 	t.Logf("gohll encoded: %d bytes", len(ours))
 }
 
-// TestSameEstimate feeds both the same hashes: dense-mode estimates must agree
-// closely (both use LogLog-Beta on identical registers).
+// TestSameEstimate feeds both the same hashes. Against an axiomhq sketch that
+// is dense from the start (NewNoSparse) the registers are identical and both
+// apply LogLog-Beta, so the estimates must agree at every size. New14 starts
+// sparse and estimates by linear counting at precision 25 until it converts,
+// which is not compared here; past that point it is checked too.
 func TestSameEstimate(t *testing.T) {
+	t.Parallel()
+
 	var s gohll.Sketch
 
-	a := hyperloglog.New14()
+	dense := hyperloglog.NewNoSparse()
+	sparse := hyperloglog.New14()
 
-	for i := range uint64(500_000) {
-		h := i * 0x9E3779B97F4A7C15
-		s.Add(h)
-		a.InsertHash(h)
+	check := func(name string, ours, theirs uint64) {
+		t.Helper()
+
+		// identical registers: allow one for floating-point rounding (FMA)
+		if diff := int64(ours) - int64(theirs); diff > 1 || diff < -1 { //nolint:gosec // G115 small counts
+			t.Fatalf("%s: gohll %d, axiomhq %d", name, ours, theirs)
+		}
 	}
 
-	ours, theirs := s.Count(), a.Estimate()
-	t.Logf("gohll %d, axiomhq %d", ours, theirs)
+	var n uint64
 
-	if diff := float64(ours) - float64(theirs); diff > 0.001*float64(theirs) || diff < -0.001*float64(theirs) {
-		t.Fatalf("estimates differ by more than 0.1%%: %d vs %d", ours, theirs)
+	for _, size := range []uint64{1, 10, 100, 1_000, 10_000, 100_000, 500_000} {
+		for ; n < size; n++ {
+			h := mix(n)
+			s.Add(h)
+			dense.InsertHash(h)
+			sparse.InsertHash(h)
+		}
+
+		check("NewNoSparse", s.Count(), dense.Estimate())
 	}
+
+	// long converted to dense by now
+	check("New14", s.Count(), sparse.Estimate())
+}
+
+// mix is the SplitMix64 finalizer: a well-spread hash of n.
+func mix(n uint64) uint64 {
+	n += 0x9E3779B97F4A7C15
+	n ^= n >> 30
+	n *= 0xBF58476D1CE4E5B9
+	n ^= n >> 27
+	n *= 0x94D049BB133111EB
+
+	return n ^ n>>31
 }

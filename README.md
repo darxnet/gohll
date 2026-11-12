@@ -41,10 +41,11 @@ a compare-and-swap: no lock, no allocation, no coordination between goroutines.
 - **`Merge`** — the union of two sketches, usable while one is being written to.
 - **Binary encoding compatible with `axiomhq/hyperloglog`** (dense, version 2):
   sketches can move between the two libraries and be merged if both were fed
-  the same hashes. `encoding.BinaryMarshaler`, `BinaryUnmarshaler`,
-  `BinaryAppender`.
-- **You bring the hash** — `Add(hash uint64)`: xxhash, `hash/maphash`,
-  whatever already hashed the item. The sketch does not hash again.
+  the same hashes (axiomhq's `Insert` hashes with MetroHash64, seed 1337).
+  `encoding.BinaryMarshaler`, `BinaryUnmarshaler`, `BinaryAppender`.
+- **You bring the hash** — `Add(hash uint64)`: xxhash, MetroHash,
+  whatever already hashed the item. The sketch does not hash again; see
+  [Choosing a hash](#choosing-a-hash).
 - **Zero dependencies** — only the standard library.
 
 ## Installation
@@ -61,13 +62,14 @@ Requires Go 1.24.
 // The zero value is ready to use; share it between goroutines as it is.
 var users gohll.Sketch
 
-// Add takes a 64-bit hash of the item.
-users.Add(maphash.String(seed, userID))
+// Add takes a 64-bit hash of the item: a stable one (here
+// github.com/cespare/xxhash/v2), so that sketches from other processes merge.
+users.Add(xxhash.Sum64String(userID))
 
 // How many distinct items so far?
 n := users.Count()
 
-// Union with another sketch (same hash function on both sides).
+// Union with another sketch (same hash function and seed on both sides).
 users.Merge(&usersFromOtherServer)
 
 // Persist, or send to another instance: axiomhq's dense encoding.
@@ -78,6 +80,21 @@ _ = back.UnmarshalBinary(data)
 // Start the next day.
 users.Reset()
 ```
+
+### Choosing a hash
+
+The hash must spread well over all 64 bits: the top 14 pick the register.
+Sketches are only comparable if they were fed the same hash function **with
+the same seed**, so anything that crosses a process boundary — `Merge` with a
+sketch from another server, `UnmarshalBinary` of stored or received bytes —
+needs a stable hash such as xxhash, or MetroHash64 with seed 1337 to merge
+with sketches that axiomhq's `Insert` filled.
+
+`hash/maphash` is fine within one process only: `maphash.MakeSeed` is random
+and a seed cannot be saved, so two processes hash the same item differently
+and their merged sketch counts roughly the sum of the two sets, not the union.
+`hash/fnv` alone is not enough either: FNV-1a barely changes the top bits
+between similar keys, and needs a finalizer (such as SplitMix64's) after it.
 
 ## Accuracy
 
@@ -94,9 +111,13 @@ Mean error and spread over 24 random data sets per size (`go test`, the
 | 120 000 | +0.05% | 0.72% |
 | 300 000 | −0.04% | 0.79% |
 
-Theory for 2^14 registers: 1.04/√16384 = 0.81%. Fed the same hashes,
-`gohll.Count()` and `axiomhq.Estimate()` return the same number (both use
-LogLog-Beta on identical dense registers).
+Theory for 2^14 registers: 1.04/√16384 = 0.81%. Fed the same hashes, a
+`gohll` sketch and an `axiomhq` sketch in its dense representation hold
+identical registers, and `gohll.Count()` and `axiomhq.Estimate()` apply the
+same LogLog-Beta formula to them. `axiomhq.New14()` starts sparse, though,
+and while it stays sparse (its first several thousand items) `Estimate` uses
+linear counting at precision 25 instead, so small counts differ, within the
+error above; `NewNoSparse()` is dense from the start.
 
 ## Benchmarks
 

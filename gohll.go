@@ -46,7 +46,12 @@ type Sketch struct {
 }
 
 // Add records one item given by its 64-bit hash. The hash must spread well
-// over all bits (xxhash, maphash...): the sketch does not hash again.
+// over all bits (xxhash, MetroHash...): the sketch does not hash again.
+//
+// Sketches that are merged or restored with UnmarshalBinary must have been fed
+// the same hash function with the same seed. hash/maphash seeds are random per
+// process and cannot be saved, so maphash suits sketches that never leave the
+// process; across processes use a stable hash.
 func (s *Sketch) Add(hash uint64) {
 	i := hash >> (64 - precision)
 	// the rank: leading zeros of the remaining 50 bits, plus one; the top 14
@@ -146,8 +151,8 @@ func (s *Sketch) Reset() {
 
 // Merge adds every item of other to s: the union of the two sets, exact in
 // the sense that it is the sketch the union would have produced. Both must
-// have been fed the same hash function. other is only read; s may be in use
-// by concurrent Adds.
+// have been fed the same hash function with the same seed (see Add). other is
+// only read; s may be in use by concurrent Adds.
 func (s *Sketch) Merge(other *Sketch) {
 	for i := range s.words {
 		o := other.words[i].Load()
