@@ -128,6 +128,8 @@ func TestSketch_UnmarshalBinaryErrors(t *testing.T) {
 		{name: "short", data: good[:5], want: gohll.ErrEncoding},
 		{name: "version", data: append([]byte{1}, good[1:]...), want: gohll.ErrEncoding},
 		{name: "precision", data: append([]byte{2, 12}, good[2:]...), want: gohll.ErrEncoding},
+		{name: "byte 2", data: append([]byte{2, 14, 1}, good[3:]...), want: gohll.ErrEncoding},
+		{name: "byte 2 sparse", data: append([]byte{2, 14, 1, 1}, good[4:]...), want: gohll.ErrEncoding},
 		{name: "sparse", data: append([]byte{2, 14, 0, 1}, good[4:]...), want: gohll.ErrSparseEncoding},
 		{name: "representation", data: append([]byte{2, 14, 0, 9}, good[4:]...), want: gohll.ErrEncoding},
 		{
