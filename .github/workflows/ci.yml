@@ -51,6 +51,10 @@ jobs:
       - name: Benchmarks compile and run once
         run: go test -run=NONE -bench=. -benchtime=1x ./...
 
+      - name: Test against axiomhq (bench module)
+        working-directory: bench
+        run: go test -race -failfast -count=1 ./...
+
   lint:
     name: Lint
     runs-on: ubuntu-latest
