@@ -4,6 +4,8 @@
 package bench
 
 import (
+	"bytes"
+	"encoding/binary"
 	"math/rand/v2"
 	"sync"
 	"testing"
@@ -166,6 +168,108 @@ func TestSameEstimate(t *testing.T) {
 
 	// long converted to dense by now
 	check("New14", s.Count(), sparse.Estimate())
+}
+
+// FuzzSameEstimate feeds two gohll sketches and two dense axiomhq sketches
+// the same hashes (8 bytes of input each), then merges the second into the
+// first on both sides. After every step the encodings must be byte-identical
+// (same registers, same header) and the estimates must agree; an axiomhq
+// encoding must also load into gohll and keep its estimate.
+func FuzzSameEstimate(f *testing.F) {
+	f.Add([]byte{}, []byte{})
+	f.Add(hashes(0), hashes(^uint64(0)))
+	f.Add(hashes(1, 1<<63, 1<<50), hashes(1<<49, 1<<50+1))
+
+	big := make([]uint64, 5000)
+	for i := range big {
+		big[i] = mix(uint64(i)) //nolint:gosec // G115
+	}
+
+	f.Add(hashes(big[:3000]...), hashes(big[2000:]...))
+
+	f.Fuzz(func(t *testing.T, a, b []byte) {
+		var ours, other gohll.Sketch
+
+		theirs := hyperloglog.NewNoSparse()
+		theirOther := hyperloglog.NewNoSparse()
+
+		for h := range split(a) {
+			ours.Add(h)
+			theirs.InsertHash(h)
+		}
+
+		for h := range split(b) {
+			other.Add(h)
+			theirOther.InsertHash(h)
+		}
+
+		same(t, "a", &ours, theirs)
+		same(t, "b", &other, theirOther)
+
+		ours.Merge(&other)
+
+		if err := theirs.Merge(theirOther); err != nil {
+			t.Fatal(err)
+		}
+
+		same(t, "a∪b", &ours, theirs)
+	})
+}
+
+// same checks that s and a hold the same registers and estimate alike, and
+// that a's encoding loads into gohll.
+func same(t *testing.T, name string, s *gohll.Sketch, a *hyperloglog.Sketch) {
+	t.Helper()
+
+	ours, err := s.MarshalBinary()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	theirs, err := a.MarshalBinary()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !bytes.Equal(ours, theirs) {
+		t.Fatalf("%s: gohll and axiomhq encodings differ", name)
+	}
+
+	// identical registers: allow one for floating-point rounding (FMA)
+	got, want := s.Count(), a.Estimate()
+	if diff := int64(got) - int64(want); diff > 1 || diff < -1 { //nolint:gosec // G115 counts fit
+		t.Fatalf("%s: gohll %d, axiomhq %d", name, got, want)
+	}
+
+	var loaded gohll.Sketch
+	if err = loaded.UnmarshalBinary(theirs); err != nil {
+		t.Fatalf("%s: UnmarshalBinary(axiomhq): %v", name, err)
+	}
+
+	if c := loaded.Count(); c != got {
+		t.Fatalf("%s: loaded from axiomhq %d, built directly %d", name, c, got)
+	}
+}
+
+// hashes encodes hs as fuzz input, 8 bytes each.
+func hashes(hs ...uint64) []byte {
+	out := make([]byte, 0, 8*len(hs))
+	for _, h := range hs {
+		out = binary.LittleEndian.AppendUint64(out, h)
+	}
+
+	return out
+}
+
+// split yields the input as 64-bit hashes, ignoring a trailing partial one.
+func split(data []byte) func(func(uint64) bool) {
+	return func(yield func(uint64) bool) {
+		for ; len(data) >= 8; data = data[8:] {
+			if !yield(binary.LittleEndian.Uint64(data)) {
+				return
+			}
+		}
+	}
 }
 
 // mix is the SplitMix64 finalizer: a well-spread hash of n.
