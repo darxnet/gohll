@@ -43,6 +43,8 @@ a compare-and-swap: no lock, no allocation, no coordination between goroutines.
   sketches can move between the two libraries and be merged if both were fed
   the same hashes (axiomhq's `Insert` hashes with MetroHash64, seed 1337).
   `encoding.BinaryMarshaler`, `BinaryUnmarshaler`, `BinaryAppender`.
+  `UnmarshalBinary` returns an error for any precision other than 14 and for
+  axiomhq's sparse representation; it never converts or merges them silently.
 - **You bring the hash** — `Add(hash uint64)`: xxhash, MetroHash,
   whatever already hashed the item. The sketch does not hash again; see
   [Choosing a hash](#choosing-a-hash).
